@@ -1,13 +1,26 @@
 import os
 import subprocess
+import requests
 from notion_client import Client
 import bibtexparser
 from datetime import datetime
 import argparse
+import tempfile
 
 # 環境変数からデフォルト値を取得
 DEFAULT_NOTION_TOKEN = os.environ.get("DEDAULT_NOTION_TOKEN")
 DEFAULT_DATABASE_ID = os.environ.get("DEDAULT_DATABASE_ID")
+
+def download_pdf_from_url(url):
+    print(f"Downloading PDF from {url}...")
+    response = requests.get(url)
+    if response.status_code == 200:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            temp_file.write(response.content)
+            return temp_file.name
+    else:
+        print(f"Failed to download PDF. Status code: {response.status_code}")
+        return None
 
 def pdf_to_bibtex(pdf_path):
     print("Getting bibtex information...")
@@ -65,7 +78,13 @@ def add_to_notion(info, notion_client, database_id):
     )
     return True
 
-def main(pdf_path, notion_token, database_id):
+def main(pdf_path, notion_token, database_id, url=None):
+    if url:
+        pdf_path = download_pdf_from_url(url)
+        if not pdf_path:
+            print("Failed to download PDF from URL.")
+            return
+
     bibtex_str = pdf_to_bibtex(pdf_path)
     if bibtex_str:
         info = parse_bibtex(bibtex_str)
@@ -77,12 +96,17 @@ def main(pdf_path, notion_token, database_id):
     else:
         print("Failed to generate BibTeX from PDF.")
 
+    if url:
+        os.unlink(pdf_path)  # 一時ファイルを削除
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert PDF to BibTeX and add to Notion database")
-    parser.add_argument("pdf_path", help="Path to the PDF file")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("pdf_path", nargs='?', help="Path to the PDF file")
+    group.add_argument("-u", "--url", help="URL of the PDF file")
     parser.add_argument("--token", default=DEFAULT_NOTION_TOKEN, help="Notion API token")
     parser.add_argument("--db", default=DEFAULT_DATABASE_ID, help="Notion database ID")
     
     args = parser.parse_args()
     
-    main(args.pdf_path, args.token, args.db)
+    main(args.pdf_path, args.token, args.db, args.url)
