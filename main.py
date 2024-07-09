@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import requests
 from notion_client import Client
@@ -32,6 +33,10 @@ def pdf_to_bibtex(pdf_path):
         return None
 
 def parse_bibtex(bibtex_str):
+    # プレフィックスを削除し、@以降の内容のみを取得
+    bibtex_str = re.sub(r'^.*?(@\w+{)', r'\1', bibtex_str, flags=re.DOTALL)
+    
+    # 以下は変更なし
     bib_database = bibtexparser.loads(bibtex_str)
     entry = bib_database.entries[0] if bib_database.entries else {}
     
@@ -67,7 +72,7 @@ def user_confirmation(message):
         else:
             print("Please answer with 'yes' or 'no'.")
 
-def add_to_notion(info, notion_client, database_id, force=False, is_url=False):
+def add_to_notion(info, notion_client, database_id, force=False, is_url=False, url=None):
     print("Checking for duplicates...")
     is_duplicate = check_duplicate(notion_client, database_id, info["title"], info["doi"])
     
@@ -97,6 +102,9 @@ def add_to_notion(info, notion_client, database_id, force=False, is_url=False):
         "READ": {"checkbox": False},
         "日付": {"date": {"start": datetime.now().isoformat()}}
     }
+
+    if is_url and url:
+        properties["URL"] = {"url": url}
     
     print("Properties being sent to Notion:")
     print(properties)
@@ -119,7 +127,7 @@ def main(pdf_path, notion_token, database_id, url=None, force=False):
     if bibtex_str:
         info = parse_bibtex(bibtex_str)
         notion_client = Client(auth=notion_token)
-        if add_to_notion(info, notion_client, database_id, force, is_url):
+        if add_to_notion(info, notion_client, database_id, force, is_url, url):
             print(f"Successfully added {info['title'] or 'Untitled'} to Notion database.")
         else:
             print(f"Skipped adding {info['title'] or 'Untitled'}.")
