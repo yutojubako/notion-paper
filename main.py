@@ -35,8 +35,11 @@ def parse_bibtex(bibtex_str):
     bib_database = bibtexparser.loads(bibtex_str)
     entry = bib_database.entries[0] if bib_database.entries else {}
     
+    title = entry.get("title", "")
+    title = title.replace("{", "").replace("}", "").strip()
+    
     return {
-        "title": entry.get("title", ""),
+        "title": title,
         "year": entry.get("year", ""),
         "doi": entry.get("doi", ""),
         "bibtex": bibtex_str
@@ -54,14 +57,40 @@ def check_duplicate(notion_client, database_id, title, doi):
     )
     return len(query["results"]) > 0
 
-def add_to_notion(info, notion_client, database_id):
-    print("checking duplicate...")
-    if check_duplicate(notion_client, database_id, info["title"], info["doi"]):
+def user_confirmation(message):
+    while True:
+        response = input(f"{message} (yes/no): ").lower().strip()
+        if response in ['yes', 'y']:
+            return True
+        elif response in ['no', 'n']:
+            return False
+        else:
+            print("Please answer with 'yes' or 'no'.")
+
+def add_to_notion(info, notion_client, database_id, force=False, is_url=False):
+    print("Checking for duplicates...")
+    is_duplicate = check_duplicate(notion_client, database_id, info["title"], info["doi"])
+    
+    if is_duplicate and not force:
         print(f"Duplicate entry found for '{info['title']}'. Skipping...")
         return False
+    elif is_duplicate and force:
+        print(f"Duplicate entry found for '{info['title']}'. Force adding...")
+    else:
+        print(f"Adding new entry: '{info['title']}'")
+
+    if not info["title"] and is_url:
+        print("\nWARNING: Null or empty title detected for URL input.")
+        print("This may indicate an issue with PDF parsing or Bibtex generation.")
+        print("The entry will be added with the title 'Untitled' if you choose to proceed.")
+        print("You may want to check the PDF and update the title manually later.\n")
+        
+        if not user_confirmation("Do you want to proceed with adding this entry?"):
+            print("Entry addition cancelled by user.")
+            return False
 
     properties = {
-        "タイトル": {"title": [{"text": {"content": info["title"]}}]},
+        "タイトル": {"title": [{"text": {"content": info["title"] or "Untitled"}}]},
         "Year": {"number": int(info["year"]) if info["year"].isdigit() else None},
         "doi": {"url": f"https://doi.org/{info['doi']}" if info['doi'] else None},
         "BibTex": {"rich_text": [{"text": {"content": info["bibtex"][:2000]}}]},
@@ -78,7 +107,8 @@ def add_to_notion(info, notion_client, database_id):
     )
     return True
 
-def main(pdf_path, notion_token, database_id, url=None):
+def main(pdf_path, notion_token, database_id, url=None, force=False):
+    is_url = bool(url)
     if url:
         pdf_path = download_pdf_from_url(url)
         if not pdf_path:
@@ -89,10 +119,10 @@ def main(pdf_path, notion_token, database_id, url=None):
     if bibtex_str:
         info = parse_bibtex(bibtex_str)
         notion_client = Client(auth=notion_token)
-        if add_to_notion(info, notion_client, database_id):
-            print(f"Successfully added {info['title']} to Notion database.")
+        if add_to_notion(info, notion_client, database_id, force, is_url):
+            print(f"Successfully added {info['title'] or 'Untitled'} to Notion database.")
         else:
-            print(f"Skipped adding {info['title']} as it already exists in the database.")
+            print(f"Skipped adding {info['title'] or 'Untitled'}.")
     else:
         print("Failed to generate BibTeX from PDF.")
 
@@ -106,7 +136,8 @@ if __name__ == "__main__":
     group.add_argument("-u", "--url", help="URL of the PDF file")
     parser.add_argument("--token", default=DEFAULT_NOTION_TOKEN, help="Notion API token")
     parser.add_argument("--db", default=DEFAULT_DATABASE_ID, help="Notion database ID")
+    parser.add_argument("-f", "--force", action="store_true", help="Force add entry even if duplicate exists")
     
     args = parser.parse_args()
     
-    main(args.pdf_path, args.token, args.db, args.url)
+    main(args.pdf_path, args.token, args.db, args.url, args.force)
