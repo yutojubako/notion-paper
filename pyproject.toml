@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "notion-paper"
+version = "0.1.0"
+description = "PDF to Notion Importer: A tool to extract bibliographic information from PDF papers and add it to a Notion database. Supports local PDF files and URL inputs, with features like duplicate checking and BibTeX formatting."
+authors = ["yutojubako <ytim8812@keio.jp>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
