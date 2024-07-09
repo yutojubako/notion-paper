@@ -1,5 +1,4 @@
 import os
-import re
 import subprocess
 import requests
 from notion_client import Client
@@ -7,10 +6,15 @@ import bibtexparser
 from datetime import datetime
 import argparse
 import tempfile
+import re
+from habanero import Crossref
+import time
 
 # 環境変数からデフォルト値を取得
 DEFAULT_NOTION_TOKEN = os.environ.get("DEDAULT_NOTION_TOKEN")
 DEFAULT_DATABASE_ID = os.environ.get("DEDAULT_DATABASE_ID")
+
+cr = Crossref()
 
 def download_pdf_from_url(url):
     print(f"Downloading PDF from {url}...")
@@ -33,10 +37,8 @@ def pdf_to_bibtex(pdf_path):
         return None
 
 def parse_bibtex(bibtex_str):
-    # プレフィックスを削除し、@以降の内容のみを取得
     bibtex_str = re.sub(r'^.*?(@\w+{)', r'\1', bibtex_str, flags=re.DOTALL)
     
-    # 以下は変更なし
     bib_database = bibtexparser.loads(bibtex_str)
     entry = bib_database.entries[0] if bib_database.entries else {}
     
@@ -104,7 +106,7 @@ def add_to_notion(info, notion_client, database_id, force=False, is_url=False, u
     }
 
     if is_url and url:
-        properties["URL"] = {"url": url}
+        properties["PDF or URL"] = {"rich_text": [{"text": {"content": url}}]}
     
     print("Properties being sent to Notion:")
     print(properties)
@@ -115,27 +117,48 @@ def add_to_notion(info, notion_client, database_id, force=False, is_url=False, u
     )
     return True
 
-def main(pdf_path, notion_token, database_id, url=None, force=False):
-    is_url = bool(url)
-    if url:
-        pdf_path = download_pdf_from_url(url)
-        if not pdf_path:
-            print("Failed to download PDF from URL.")
-            return
+def get_citations(doi):
+    try:
+        work = cr.works(ids=doi)
+        if 'reference' in work['message']:
+            return [ref.get('DOI') for ref in work['message']['reference'] if ref.get('DOI')]
+    except Exception as e:
+        print(f"Error fetching citations for DOI {doi}: {e}")
+    return []
+
+def process_paper(url, notion_client, database_id, force=False, recursive=False, processed_dois=None):
+    if processed_dois is None:
+        processed_dois = set()
+
+    pdf_path = download_pdf_from_url(url) if url.startswith('http') else url
+    if not pdf_path:
+        return
 
     bibtex_str = pdf_to_bibtex(pdf_path)
     if bibtex_str:
         info = parse_bibtex(bibtex_str)
-        notion_client = Client(auth=notion_token)
-        if add_to_notion(info, notion_client, database_id, force, is_url, url):
-            print(f"Successfully added {info['title'] or 'Untitled'} to Notion database.")
+        if add_to_notion(info, notion_client, database_id, force, bool(url), url):
+            print(f"Successfully added {info['title']} to Notion database.")
+            
+            if recursive and info['doi'] and info['doi'] not in processed_dois:
+                processed_dois.add(info['doi'])
+                citations = get_citations(info['doi'])
+                for citation_doi in citations:
+                    citation_url = f"https://doi.org/{citation_doi}"
+                    print(f"Processing citation: {citation_url}")
+                    process_paper(citation_url, notion_client, database_id, force, recursive, processed_dois)
+                    time.sleep(1)  # Rate limiting
         else:
-            print(f"Skipped adding {info['title'] or 'Untitled'}.")
+            print(f"Skipped adding {info['title']}.")
     else:
         print("Failed to generate BibTeX from PDF.")
 
-    if url:
+    if url.startswith('http'):
         os.unlink(pdf_path)  # 一時ファイルを削除
+
+def main(pdf_path, notion_token, database_id, url=None, force=False, recursive=False):
+    notion_client = Client(auth=notion_token)
+    process_paper(url or pdf_path, notion_client, database_id, force, recursive)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert PDF to BibTeX and add to Notion database")
@@ -145,7 +168,8 @@ if __name__ == "__main__":
     parser.add_argument("--token", default=DEFAULT_NOTION_TOKEN, help="Notion API token")
     parser.add_argument("--db", default=DEFAULT_DATABASE_ID, help="Notion database ID")
     parser.add_argument("-f", "--force", action="store_true", help="Force add entry even if duplicate exists")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Recursively add cited papers")
     
     args = parser.parse_args()
     
-    main(args.pdf_path, args.token, args.db, args.url, args.force)
+    main(args.pdf_path, args.token, args.db, args.url, args.force, args.recursive)
